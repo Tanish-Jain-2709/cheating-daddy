@@ -4,6 +4,13 @@ const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
 
+// Add a static prompt that will be sent alongside every screenshot so Gemini always has context.
+// Feel free to change this from the renderer at runtime in the future if you want more flexibility.
+const STATIC_IMAGE_PROMPT =
+    'You are an assistant. The user has provided a screenshot. ' +
+    'Please analyse the screenshot and answer the user\'s implicit or explicit question. ' +
+    'Treat every screenshot as a new, independent request – ignore any prior context.';
+
 // Conversation tracking variables
 let currentSessionId = null;
 let currentTranscription = '';
@@ -527,7 +534,15 @@ function setupGeminiIpcHandlers(geminiSessionRef) {
                 return { success: false, error: 'Image buffer too small' };
             }
 
+            initializeNewSession();
+
             process.stdout.write('!');
+            // 1) Send the static prompt so Gemini has context
+            await geminiSessionRef.current.sendRealtimeInput({
+                text: STATIC_IMAGE_PROMPT,
+            });
+
+            // 2) Send the screenshot image
             await geminiSessionRef.current.sendRealtimeInput({
                 media: { data: data, mimeType: 'image/jpeg' },
             });

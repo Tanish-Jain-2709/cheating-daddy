@@ -109,6 +109,23 @@ let tokenTracker = {
     },
 };
 
+// -----------------------------------------------------------------------------
+// Screen-change detection (skip redundant screenshots)
+// -----------------------------------------------------------------------------
+// Down-scaled canvas size used to compare two frames quickly.
+const DIFF_CANVAS_WIDTH = 160; // finer resolution for change detection
+const DIFF_CANVAS_HEIGHT = 90;
+// Fraction of pixels that must differ before we treat the screen as "changed".
+const SCREEN_CHANGE_THRESHOLD = 0.05; // 5 % threshold
+// Internal buffers/contexts for change detection.
+let diffCanvas = null;
+let diffContext = null;
+let lastSentDiffData = null; // Uint8ClampedArray from the last screenshot actually sent
+
+// Minimum gap between automated screenshot sends (to avoid duplicate frames)
+const MIN_SEND_INTERVAL_MS = 1500;
+let lastScreenshotSentTime = 0;
+
 // Track audio tokens every few seconds
 setInterval(() => {
     tokenTracker.trackAudioTokens();
@@ -263,8 +280,8 @@ async function startCapture(screenshotIntervalSeconds = 5, imageQuality = 'mediu
             const intervalMilliseconds = parseInt(screenshotIntervalSeconds) * 1000;
             screenshotInterval = setInterval(() => captureScreenshot(imageQuality), intervalMilliseconds);
 
-            // Capture first screenshot immediately
-            setTimeout(() => captureScreenshot(imageQuality), 100);
+            // Capture first screenshot after a brief delay so the page stabilises
+            setTimeout(() => captureScreenshot(imageQuality), 1500);
         }
     } catch (err) {
         console.error('Error starting capture:', err);
@@ -384,6 +401,74 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
         console.warn('Screenshot appears to be blank/black');
     }
 
+    // ---------------------------------------------------------------------
+    // Only send automated screenshots when the screen content has changed
+    // significantly compared with the last screenshot that was SENT.
+    // ---------------------------------------------------------------------
+    let currentDiffData = null; // will hold down-scaled frame for potential later use
+    if (!isManual) {
+        // Lazy-init diff canvas
+        if (!diffCanvas) {
+            diffCanvas = document.createElement('canvas');
+            diffCanvas.width = DIFF_CANVAS_WIDTH;
+            diffCanvas.height = DIFF_CANVAS_HEIGHT;
+            diffContext = diffCanvas.getContext('2d');
+        }
+
+        // Draw the current frame to the diff canvas (scaled down)
+        diffContext.drawImage(
+            offscreenCanvas,
+            0,
+            0,
+            DIFF_CANVAS_WIDTH,
+            DIFF_CANVAS_HEIGHT
+        );
+
+        const diffImageData = diffContext.getImageData(
+            0,
+            0,
+            DIFF_CANVAS_WIDTH,
+            DIFF_CANVAS_HEIGHT
+        ).data;
+        currentDiffData = diffImageData; // keep for later
+
+        if (lastSentDiffData) {
+            let changedPixels = 0;
+            const totalPixels = DIFF_CANVAS_WIDTH * DIFF_CANVAS_HEIGHT;
+
+            // Compare every pixel's RGB values; alpha channel ignored.
+            for (let i = 0; i < diffImageData.length; i += 4) {
+                const rDiff = Math.abs(diffImageData[i] - lastSentDiffData[i]);
+                const gDiff = Math.abs(diffImageData[i + 1] - lastSentDiffData[i + 1]);
+                const bDiff = Math.abs(diffImageData[i + 2] - lastSentDiffData[i + 2]);
+
+                // Count pixel as changed if any channel differs noticeably (lower threshold)
+                if (rDiff > 10 || gDiff > 10 || bDiff > 10) {
+                    changedPixels++;
+                }
+            }
+
+            const changeRatio = changedPixels / totalPixels;
+            if (changeRatio < SCREEN_CHANGE_THRESHOLD) {
+                console.log(
+                    `🛑 Screen change ${ (changeRatio * 100).toFixed(2) }% (< threshold), skipping screenshot`
+                );
+                return; // Skip sending – nothing interesting changed
+            }
+
+            // Throttle sends if the last one was too recent
+            const now = Date.now();
+            if (now - lastScreenshotSentTime < MIN_SEND_INTERVAL_MS) {
+                console.log('⏳ Skipping screenshot – min send interval not met');
+                return;
+            }
+
+            // We are going to send this screenshot, so record its diff data now.
+            lastSentDiffData = new Uint8ClampedArray(currentDiffData);
+        }
+        // If we reach here, either this is the first screenshot or changeRatio >= threshold
+    }
+
     let qualityValue;
     switch (imageQuality) {
         case 'high':
@@ -425,6 +510,9 @@ async function captureScreenshot(imageQuality = 'medium', isManual = false) {
                     const imageTokens = tokenTracker.calculateImageTokens(offscreenCanvas.width, offscreenCanvas.height);
                     tokenTracker.addTokens(imageTokens, 'image');
                     console.log(`📊 Image sent successfully - ${imageTokens} tokens used (${offscreenCanvas.width}x${offscreenCanvas.height})`);
+
+                    lastScreenshotSentTime = Date.now();
+                    // (no-op) diff buffer already updated before send for automated screenshots.
                 } else {
                     console.error('Failed to send image:', result.error);
                 }

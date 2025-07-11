@@ -7,9 +7,10 @@ const { getSystemPrompt } = require('./prompts');
 // Add a static prompt that will be sent alongside every screenshot so Gemini always has context.
 // Feel free to change this from the renderer at runtime in the future if you want more flexibility.
 const STATIC_IMAGE_PROMPT =
-    'You are an assistant. The user has provided a screenshot. ' +
-    'Please analyse the screenshot and answer the user\'s implicit or explicit question. ' +
-    'Treat every screenshot as a new, independent request – ignore any prior context.';
+    'You are the greatest C++ and Data-Structures & Algorithms expert. The user has provided a screenshot. ' +
+    'Ignore ALL previous conversation turns and images – answer ONLY based on this screenshot.\n' +
+    'If the screenshot contains a DSA programming problem, reply with **only the complete, compilable C++17 solution (no extra commentary)**.\n' +
+    'If the screenshot is a multiple-choice question, reply with **just the correct option letter / answer text**.\n';
 
 // Conversation tracking variables
 let currentSessionId = null;
